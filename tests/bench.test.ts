@@ -19,3 +19,20 @@ it.runIf(env.BENCH)('bench: anneal all examples', () => {
     console.log(`${ex.name.padEnd(22)} board ${p.board.strips}x${p.board.holes} -> ${m.height}x${m.width}=${m.area} cuts ${m.cuts} links ${m.links} (len ${m.linkLength}) TD ${m.paperTD} cost ${b.cost.toFixed(1)} verify ${v.ok} ${(ms/1000).toFixed(1)}s ${(ms*1000/(iters*restarts)).toFixed(1)}us/it`);
   }
 });
+
+it.runIf(env.BENCH && env.ASP)('bench: ASP (relaxed) + router vs annealing on the same board', async () => {
+  const { solveAsp } = await import('../src/asp/solve');
+  const { compactBoard } = await import('../src/asp/encode');
+  const { evaluate, isClean } = await import('../src/core/cost');
+  for (const ex of EXAMPLES) {
+    const p = makeProblem(parseNetlist(ex.source).netlist!);
+    const sa = new Annealer(p, { iterations: 60000, restarts: 3, seed: 1, weights: DEFAULT_WEIGHTS, route: { cutMode: 'hole' } }).run();
+    const board = compactBoard(sa.metrics, p.board, 2);
+    const pb = makeProblem(p.netlist, board);
+    const r = await solveAsp(pb, { mode: 'relaxed', board, cutMode: 'hole', timeLimit: Number(env.TL ?? 20), linkWeight: 6 });
+    const ev = r.layout ? evaluate(pb, r.layout, { cutMode: 'hole' }, DEFAULT_WEIGHTS) : null;
+    const fmt = (m: any, c: number) => `${m.height}x${m.width}=${m.area} cuts ${m.cuts} links ${m.links} unrouted ${m.unrouted} cost ${c.toFixed(0)}${isClean(m) ? ' ✓' : ' ✗'}`;
+    const hy = r.layout ? new Annealer(pb, { iterations: 60000, restarts: 1, seed: 1, weights: DEFAULT_WEIGHTS, route: { cutMode: 'hole' }, initial: r.layout }).run() : null;
+    console.log(`${ex.name.padEnd(22)} board ${board.strips}x${board.holes}\n   SA : ${fmt(sa.metrics, sa.cost)}\n   ASP: ${r.outcome} ${r.models} models ${r.seconds.toFixed(1)}s ${ev ? fmt(ev.metrics, ev.cost) : '-'}\n   ASP→SA refine: ${hy ? fmt(hy.metrics, hy.cost) : '-'}`);
+  }
+}, 600000);

@@ -15,6 +15,7 @@
     "bench": "BENCH=1 vitest run tests/bench.test.ts --silent=false"
   },
   "dependencies": {
+    "clingo-wasm": "0.6.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

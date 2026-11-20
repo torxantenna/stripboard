@@ -9,6 +9,7 @@ import { DEFAULT_WEIGHTS, type BoardSize, type CostWeights, type CutMode, type L
 import { verify } from '../core/verify';
 import { EXAMPLES } from '../examples';
 import type { StartMessage, WorkerMessage } from '../worker/protocol';
+import { AspPanel, type Snapshot } from './AspPanel';
 import { BoardView, type Side } from './BoardView';
 import { buildSheet, buildSheetText } from './buildSheet';
 import { downloadBlob, downloadText, svgToPng, svgToString } from './download';
@@ -80,6 +81,7 @@ export function App() {
   const [runError, setRunError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState<number | null>(null);
   const [runId, setRunId] = useState(0);
+  const [saSnap, setSaSnap] = useState<Snapshot | null>(null);
   const autoRun = useRef(!saved);
   const workersRef = useRef<Worker[]>([]);
   const [workerCount, setWorkerCount] = useState(1);
@@ -167,6 +169,7 @@ export function App() {
       const t0 = performance.now();
       const st = Array.from({ length: n }, () => ({ progress: 0, best: Infinity, current: Infinity, done: false, restart: 0 }));
       let globalBest = Infinity;
+      let bestLayout: Layout | null = null;
       setRunning(true);
       setRunId((k) => k + 1);
       setStatus(null);
@@ -190,6 +193,7 @@ export function App() {
           st[k] = { progress: m.status.progress, best: m.status.bestCost, current: m.status.currentCost, done: m.type === 'done', restart: m.status.restart };
           if (m.best && m.best.cost < globalBest) {
             globalBest = m.best.cost;
+            bestLayout = m.best.layout;
             applyLayout(refs, m.best.layout);
           }
           const progress = st.reduce((a, s) => a + s.progress, 0) / n;
@@ -200,7 +204,13 @@ export function App() {
           setHistory((h) => [...h, { p: progress, best, current }]);
           if (m.type === 'done') worker.terminate();
           if (allDone) {
-            setElapsed((performance.now() - t0) / 1000);
+            const secs = (performance.now() - t0) / 1000;
+            setElapsed(secs);
+            if (bestLayout) {
+              const ev = evaluate(problem, bestLayout, routeOpts, settings.weights);
+              const ok = verify(problem, bestLayout, ev.route.cuts, ev.route.links).ok;
+              setSaSnap({ layout: bestLayout, metrics: ev.metrics, clean: isClean(ev.metrics) && ok, seconds: secs });
+            }
             workersRef.current = [];
             setRunning(false);
           }
@@ -230,6 +240,7 @@ export function App() {
 
   // Stop when the problem changes under a running optimiser; auto-run after loading an example.
   useEffect(() => {
+    setSaSnap(null);
     if (workersRef.current.length) stop();
     if (autoRun.current && problem) {
       autoRun.current = false;
@@ -645,6 +656,18 @@ export function App() {
             <p className="hint">No layout yet.</p>
           )}
         </section>
+
+        {problem && (
+          <AspPanel
+            problem={problem}
+            currentMetrics={m ?? null}
+            cutMode={settings.cutMode}
+            weights={settings.weights}
+            sa={saSnap}
+            disabled={running}
+            onShow={(l) => applyLayout(problem.netlist.components.map((c) => c.ref), l)}
+          />
+        )}
 
         <section>
           <h2>Settings</h2>

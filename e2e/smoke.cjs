@@ -48,6 +48,35 @@ const SCALE = Number(process.env.SCALE || 1);
     await page.click('text=Component side');
   }
 
+  // Exact solver (clingo-wasm) in the browser.
+  const aspCase = async (example, model, limit, expect) => {
+    const prevRun = Number((await page.getAttribute('.progress', 'data-run').catch(() => '0')) || 0);
+    await page.selectOption('select[aria-label="Load example"]', example);
+    await page.waitForFunction(
+      (prev) => {
+        const el = document.querySelector('.progress');
+        return el && Number(el.getAttribute('data-run')) > prev && el.getAttribute('data-done') === 'yes';
+      },
+      prevRun,
+      { timeout: 120000 },
+    );
+    await page.selectOption('.asp select >> nth=0', model);
+    await page.fill('.asp input[type=number]', String(limit));
+    const t0 = Date.now();
+    await page.click('text=Solve with clingo');
+    await page.waitForSelector('[data-testid=asp-result]', { timeout: (limit + 60) * 1000 });
+    const badge = (await page.textContent('[data-testid=asp-result] .badge')).trim();
+    const detail = (await page.textContent('[data-testid=asp-result]')).replace(badge, '').trim();
+    const table = await page.$$eval('table.compare tbody tr', (rows) => rows.map((r) => [...r.children].map((c) => c.textContent).join(' ')).join(' | '));
+    const ok = badge.includes(expect);
+    console.log(`clingo ${example}/${model}: ${badge} (${((Date.now() - t0) / 1000).toFixed(1)}s) ${ok ? '' : `EXPECTED "${expect}" `}— ${detail.slice(0, 160)}\n   ${table}`);
+    if (!ok) failures++;
+    await page.screenshot({ path: path.join(OUT, `clingo-${example}-${model}.png`), fullPage: true });
+  };
+  await aspCase('555', 'paper', 5, 'Not expressible');
+  await aspCase('astable', 'paper', 20, 'Unsatisfiable');
+  await aspCase('555', 'relaxed', 6, 'Time limit');
+
   // Manual drag: move the first part a few holes and check the cost changes.
   const before = await page.$$eval('table.metrics tr', (rows) => rows.map((r) => r.textContent).join('|'));
   const part = page.locator('g.part').first();

@@ -580,3 +580,22 @@ table.parts td {
     border: none;
   }
 }
+
+.panel a {
+  color: var(--accent);
+}
+table.compare th {
+  text-align: right;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+  padding-bottom: 4px;
+}
+table.compare td:nth-child(2) {
+  text-align: right;
+}
+.asp-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

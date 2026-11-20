@@ -207,8 +207,8 @@ export function BoardView(props: Props) {
       const ccy = (cy(pins[0].y) + cy(pins[1].y)) / 2;
       body = <circle className="body" cx={ccx} cy={ccy} r={r} />;
     } else if (kind === 'dip') {
-      const vertical = by1 - by0 > bx1 - bx0;
-      // Notch at the pin-1 end.
+      // Pin rows run along pin1 -> pin2; the notch sits at the pin-1 end of that axis.
+      const vertical = pins[1].x === pins[0].x;
       const p1 = { x: cx(pins[0].x), y: cy(pins[0].y) };
       const nx = vertical ? mx : p1.x < mx ? bx0 + S * 0.1 : bx1 - S * 0.1;
       const ny = vertical ? (p1.y < my ? by0 + S * 0.1 : by1 - S * 0.1) : my;
