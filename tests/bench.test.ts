@@ -11,8 +11,8 @@ it.runIf(env.BENCH)('bench: anneal all examples', () => {
   for (const ex of EXAMPLES) {
     const p = makeProblem(parseNetlist(ex.source).netlist!);
     const t = performance.now();
-    const iters = 60000, restarts = 3;
-    const b = new Annealer(p, { iterations: iters, restarts, seed: 1, weights: DEFAULT_WEIGHTS, route: { cutMode: 'hole' } }).run();
+    const iters = Number(env.ITERS ?? 60000), restarts = Number(env.RESTARTS ?? 3);
+    const b = new Annealer(p, { iterations: iters, restarts, seed: Number(env.SEED ?? 1), weights: { ...DEFAULT_WEIGHTS, link: Number(env.WLINK ?? DEFAULT_WEIGHTS.link), area: Number(env.WAREA ?? DEFAULT_WEIGHTS.area), linkLength: Number(env.WLEN ?? DEFAULT_WEIGHTS.linkLength), cut: Number(env.WCUT ?? DEFAULT_WEIGHTS.cut) }, route: { cutMode: 'hole' } }).run();
     const ms = performance.now() - t;
     const m = b.metrics;
     const v = verify(p, b.layout, b.route.cuts, b.route.links);

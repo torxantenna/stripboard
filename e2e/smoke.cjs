@@ -1,0 +1,79 @@
+// End-to-end smoke test: `npm run build && npx vite preview --port 4173` then `node e2e/smoke.cjs`.
+// Loads every example, waits for the optimiser to produce a verified layout, screenshots both
+// board sides, drags a part and checks the metrics update.
+const { chromium } = require('playwright');
+const fs = require('fs');
+const path = require('path');
+
+const URL = process.env.APP_URL || 'http://localhost:4173/';
+const OUT = process.env.SHOT_DIR || path.join(__dirname, '..', 'screenshots');
+const SCALE = Number(process.env.SCALE || 1);
+
+(async () => {
+  fs.mkdirSync(OUT, { recursive: true });
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1500, height: 950 }, deviceScaleFactor: SCALE });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  await page.goto(URL);
+
+  const ids = await page.$$eval('select[aria-label="Load example"] option', (os) => os.map((o) => o.value).filter(Boolean));
+  let failures = 0;
+  for (const id of ids) {
+    const prevRun = Number((await page.getAttribute('.progress', 'data-run').catch(() => '0')) || 0);
+    await page.selectOption('select[aria-label="Load example"]', id);
+    const t0 = Date.now();
+    try {
+      await page.waitForFunction(
+        (prev) => {
+          const el = document.querySelector('.progress');
+          return el && Number(el.getAttribute('data-run')) > prev && el.getAttribute('data-done') === 'yes';
+        },
+        prevRun,
+        { timeout: 120000 },
+      );
+    } catch (e) {
+      console.log(`${id}: optimiser did not finish`);
+      failures++;
+      continue;
+    }
+    const status = await page.textContent('[data-testid=verify-status]');
+    const metrics = await page.$$eval('table.metrics tr', (rows) => rows.map((r) => r.textContent).join(' | '));
+    console.log(`${id}: ${status} in ${((Date.now() - t0) / 1000).toFixed(1)}s — ${metrics}`);
+    if (!status.includes('Verified')) failures++;
+    await page.screenshot({ path: path.join(OUT, `${id}-component.png`), fullPage: true });
+    await page.click('text=Copper side');
+    await page.locator('svg.board').screenshot({ path: path.join(OUT, `${id}-copper.png`) });
+    await page.click('text=Component side');
+  }
+
+  // Manual drag: move the first part a few holes and check the cost changes.
+  const before = await page.$$eval('table.metrics tr', (rows) => rows.map((r) => r.textContent).join('|'));
+  const part = page.locator('g.part').first();
+  const box = await part.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 90, box.y + box.height / 2 + 60, { steps: 8 });
+  await page.mouse.up();
+  const after = await page.$$eval('table.metrics tr', (rows) => rows.map((r) => r.textContent).join('|'));
+  const selected = await page.textContent('.statusbar');
+  console.log(`drag: metrics ${before === after ? 'UNCHANGED' : 'changed'}; status bar: ${selected.trim()}`);
+  if (before === after) failures++;
+  await page.screenshot({ path: path.join(OUT, `after-drag.png`), fullPage: true });
+
+  // Phone width: no horizontal page scroll.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  console.log(`mobile horizontal overflow: ${overflow}px`);
+  if (overflow > 0) failures++;
+  await page.screenshot({ path: path.join(OUT, `mobile.png`) });
+
+  if (errors.length) {
+    console.log('page errors:\n  ' + errors.join('\n  '));
+    failures++;
+  }
+  await browser.close();
+  console.log(failures ? `FAILED (${failures})` : 'ALL OK');
+  process.exit(failures ? 1 : 0);
+})();

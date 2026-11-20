@@ -1,0 +1,582 @@
+:root {
+  --bg: #f6f4ef;
+  --panel: #ffffff;
+  --border: #ded9cf;
+  --text: #22201c;
+  --muted: #7a746a;
+  --accent: #b8621b;
+  --accent-text: #ffffff;
+  --ok: #1f7a3d;
+  --ok-bg: #e3f3e7;
+  --bad: #b3261e;
+  --bad-bg: #fbe7e5;
+  --warn: #8a5a00;
+  --pcb: #e8dcc2;
+  --copper: #d49a5d;
+  --hole: #fbf8f1;
+  --part-fill: #fffdf8;
+  --part-stroke: #4a443b;
+  --ic-fill: #3a3833;
+  --ic-text: #f2efe8;
+  --lead: #8f8a80;
+  --link: #2c6fb7;
+  --cut: #c62828;
+  --select: #ff8a00;
+  --font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #17181a;
+    --panel: #212225;
+    --border: #36383c;
+    --text: #e9e7e3;
+    --muted: #9b978f;
+    --accent: #e08a3c;
+    --accent-text: #1b1206;
+    --ok: #6ccf8a;
+    --ok-bg: #1d3325;
+    --bad: #ff8a80;
+    --bad-bg: #3a1f1d;
+    --warn: #f0c060;
+    --pcb: #2b2721;
+    --copper: #8d5a2b;
+    --hole: #151413;
+    --part-fill: #2f3033;
+    --part-stroke: #c9c4bb;
+    --ic-fill: #0e0e0f;
+    --ic-text: #e8e5df;
+    --lead: #8a867e;
+    --link: #6aaef5;
+    --cut: #ff6b5e;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+}
+
+code,
+kbd,
+.mono {
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+
+kbd {
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 4px;
+  background: var(--panel);
+}
+
+button,
+select,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+select,
+input {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  min-width: 0;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) minmax(260px, 300px);
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    'top top top'
+    'left center right';
+  gap: 12px;
+  padding: 12px 16px 16px;
+  min-height: 100vh;
+}
+
+.topbar {
+  grid-area: top;
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.topbar h1 {
+  font-size: 20px;
+  margin: 0;
+}
+.logo {
+  color: var(--accent);
+}
+.tagline {
+  margin: 0;
+  color: var(--muted);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.panel.left {
+  grid-area: left;
+}
+.panel.right {
+  grid-area: right;
+}
+.panel h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+.panel section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.row.between {
+  justify-content: space-between;
+}
+.row h2 {
+  margin: 0;
+}
+.small {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.netlist {
+  width: 100%;
+  min-height: 340px;
+  resize: vertical;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  white-space: pre;
+  overflow: auto;
+}
+
+.messages {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+}
+.messages.errors {
+  color: var(--bad);
+}
+.messages.warnings {
+  color: var(--warn);
+}
+p.messages {
+  padding-left: 0;
+}
+.hint {
+  color: var(--muted);
+  margin: 0;
+}
+
+.help summary,
+details summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.help table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+  margin-top: 6px;
+}
+.help td {
+  padding: 3px 6px 3px 0;
+  vertical-align: top;
+}
+
+.center {
+  grid-area: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.toolbar .spacer {
+  flex: 1;
+}
+.seg {
+  display: inline-flex;
+}
+.seg button {
+  border-radius: 0;
+  margin-left: -1px;
+}
+.seg button:first-child {
+  border-radius: 6px 0 0 6px;
+  margin-left: 0;
+}
+.seg button:last-child {
+  border-radius: 0 6px 6px 0;
+}
+.seg button.on {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.board-wrap {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  overflow: auto;
+  max-height: calc(100vh - 210px);
+  min-height: 300px;
+}
+.board-wrap.zoom-fit svg.board {
+  width: 100%;
+  height: auto;
+  max-height: calc(100vh - 230px);
+}
+.board-wrap.zoom-fixed svg.board {
+  width: 100%;
+  height: auto;
+}
+
+.statusbar {
+  font-size: 13px;
+  min-height: 20px;
+}
+
+/* --- board drawing ---------------------------------------------------------- */
+svg.board {
+  display: block;
+  user-select: none;
+  touch-action: none;
+  font-family: var(--font);
+}
+.board .pcb {
+  fill: var(--pcb);
+}
+.board .copper {
+  fill: var(--copper);
+}
+.board .hole {
+  fill: var(--hole);
+  pointer-events: none;
+}
+.board .axis {
+  fill: var(--muted);
+  font-size: 10px;
+}
+.board .side-label {
+  font-size: 11px;
+  font-style: italic;
+}
+.board .used {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
+.board .cut path {
+  stroke: var(--cut);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+.board .cut-gap {
+  fill: var(--pcb);
+}
+.board .link line {
+  stroke: var(--link);
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+.board .link circle {
+  fill: var(--link);
+}
+.board .link-under line {
+  stroke-dasharray: 3 4;
+  stroke-width: 2;
+  opacity: 0.7;
+}
+.board .part .body {
+  fill: var(--part-fill);
+  stroke: var(--part-stroke);
+  stroke-width: 1.5;
+}
+.board .part .body.ic {
+  fill: var(--ic-fill);
+}
+.board .part.kind-dip .label {
+  fill: var(--ic-text);
+}
+.board .part .notch {
+  fill: var(--part-fill);
+  stroke: var(--part-stroke);
+}
+.board .part .lead {
+  stroke: var(--lead);
+  stroke-width: 2.5;
+}
+.board .part .pin {
+  fill: var(--hole);
+  stroke-width: 3;
+}
+.board .part .label {
+  fill: var(--text);
+  font-size: 10px;
+  pointer-events: none;
+}
+.board .part .label .ref {
+  font-weight: 700;
+}
+.board .part .label .val {
+  font-size: 8.5px;
+}
+.board .part.selected .body {
+  stroke: var(--select);
+  stroke-width: 3;
+}
+.board .part.ghost .body,
+.board .part.ghost .lead,
+.board .part.ghost .notch {
+  fill: none;
+  stroke: var(--part-stroke);
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+  opacity: 0.45;
+}
+.board .part.ghost .pin {
+  fill: #c9ccd1;
+  stroke-width: 2;
+}
+.board .ratsnest {
+  stroke: var(--bad);
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+}
+.board .violation {
+  fill: none;
+  stroke: var(--bad);
+  stroke-width: 2.5;
+}
+
+/* --- right panel ---------------------------------------------------------------- */
+.progress .bar {
+  height: 6px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.progress .bar div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.1s linear;
+}
+.spark path {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+}
+.spark .spark-best {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.spark .spark-current {
+  stroke: var(--muted);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+
+.badge {
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 6px;
+  text-align: center;
+}
+.badge.ok {
+  color: var(--ok);
+  background: var(--ok-bg);
+}
+.badge.bad {
+  color: var(--bad);
+  background: var(--bad-bg);
+}
+
+table.metrics {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+table.metrics td {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+table.metrics td:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12.5px;
+  color: var(--muted);
+  flex: 1;
+  min-width: 0;
+}
+.field input,
+.field select {
+  color: var(--text);
+  width: 100%;
+}
+.field.inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  margin: 4px 0;
+}
+.field.inline input {
+  width: 80px;
+}
+
+/* --- build sheet ------------------------------------------------------------------- */
+.sheet {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.sheet summary {
+  font-weight: 600;
+  color: var(--text);
+}
+.sheet h3 {
+  font-size: 13px;
+  margin: 12px 0 4px;
+}
+.sheet ol {
+  margin: 0;
+  padding-left: 22px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.sheet-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+table.parts {
+  border-collapse: collapse;
+  font-size: 12.5px;
+  width: 100%;
+}
+table.parts th,
+table.parts td {
+  text-align: left;
+  padding: 3px 8px 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+@media (max-width: 1100px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+    grid-template-areas:
+      'top top'
+      'center right'
+      'left left';
+  }
+}
+
+@media (max-width: 760px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'top' 'center' 'right' 'left';
+    padding: 10px 16px;
+  }
+  .sheet-cols {
+    grid-template-columns: 1fr;
+  }
+  .board-wrap {
+    max-height: none;
+  }
+}
+
+@media print {
+  .panel,
+  .toolbar,
+  .statusbar,
+  .topbar .tagline {
+    display: none !important;
+  }
+  .app {
+    display: block;
+  }
+  .board-wrap {
+    border: none;
+    max-height: none;
+  }
+  .sheet {
+    border: none;
+  }
+}

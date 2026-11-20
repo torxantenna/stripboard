@@ -25,6 +25,11 @@ export interface Footprint {
 
 export class FootprintError extends Error {}
 
+/** Radius (in holes) of a radial part's can, for a lead spacing of n holes. */
+export function radialRadius(n: number): number {
+  return n / 2 + 0.3;
+}
+
 const ALL_ROTATIONS: Rotation[] = [0, 90, 180, 270];
 
 function range(a: number, b: number): number[] {
@@ -109,7 +114,30 @@ export function parseFootprint(specRaw: string): Footprint {
     case 'radial': {
       if (suffixNum) throw new FootprintError(`use radial(n), e.g. radial(2)`);
       const n = args.length ? parseIntParam(args[0], 'radial lead spacing', 1, 10) : 2;
-      return makeInline(`radial(${n})`, `2-lead radial, ${n} apart`, 2, n);
+      return {
+        name: `radial(${n})`,
+        description: `2-lead radial, ${n} apart`,
+        pinCount: 2,
+        spans: [n],
+        rotations: ALL_ROTATIONS,
+        base: () => {
+          // The can is a disc of radius RADIAL_BODY(n) around the midpoint of the leads; it covers
+          // every hole whose centre lies inside it (other than the two lead holes).
+          const pins = [
+            { x: 0, y: 0 },
+            { x: n, y: 0 },
+          ];
+          const r = radialRadius(n);
+          const body: Hole[] = [];
+          const R = Math.ceil(r);
+          for (let y = -R; y <= R; y++)
+            for (let x = -R; x <= n + R; x++) {
+              if ((x === 0 || x === n) && y === 0) continue;
+              if (Math.hypot(x - n / 2, y) < r) body.push({ x, y });
+            }
+          return { pins, body };
+        },
+      };
     }
     case 'dip': {
       const n = parseIntParam(suffixNum ?? args[0], 'DIP pin count', 4, 64);

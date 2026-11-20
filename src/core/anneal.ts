@@ -173,12 +173,22 @@ export class Annealer {
     const roll = rng.next();
     const r = Math.max(1, Math.round(this.maxR * heat));
 
-    if (roll < 0.5 || n === 1) {
+    if (roll < 0.2) {
+      // Net-aware move: slide the part so one of its pins lands on a strip its net already uses.
+      const target = this.netStripFor(from, i);
+      if (target) {
+        p.y += target.dy;
+        p.x += rng.int(-Math.min(r, 3), Math.min(r, 3));
+      } else {
+        p.y += rng.int(-1, 1);
+        p.x += rng.int(-1, 1);
+      }
+    } else if (roll < 0.55 || n === 1) {
       do {
         p.x += rng.int(-r, r);
         p.y += rng.int(-r, r);
       } while (p.x === from[i].x && p.y === from[i].y && r > 0 && rng.next() < 0.9);
-    } else if (roll < 0.65) {
+    } else if (roll < 0.67) {
       if (fp.rotations.length > 1) {
         const others = fp.rotations.filter((x) => x !== p.rot);
         // Rotate about the part's centre so small moves stay local.
@@ -191,7 +201,7 @@ export class Annealer {
         p.x += rng.int(-1, 1);
         p.y += rng.int(-1, 1);
       }
-    } else if (roll < 0.75 && fp.spans.length > 1) {
+    } else if (roll < 0.77 && fp.spans.length > 1) {
       const idx = fp.spans.indexOf(p.span);
       const ni = Math.max(0, Math.min(fp.spans.length - 1, idx + (rng.next() < 0.5 ? -1 : 1)));
       p.span = fp.spans[ni];
@@ -215,6 +225,32 @@ export class Annealer {
     }
     next[i] = clampToBoard(fp, p, W, H);
     return next;
+  }
+
+  /** Pick a random connected pin of part i and a strip where another part has a pin on that net. */
+  private netStripFor(layout: Layout, i: number): { dy: number } | null {
+    const nets = this.problem.pinNets[i];
+    const connected: number[] = [];
+    for (let k = 0; k < nets.length; k++) if (nets[k] >= 0) connected.push(k);
+    if (!connected.length) return null;
+    const pi = this.rng.pick(connected);
+    const net = nets[pi];
+    const g = geometry(this.problem.fps[i], layout[i].rot, layout[i].span);
+    const pinY = g.pins[pi].y + layout[i].y;
+    const strips: number[] = [];
+    for (let j = 0; j < layout.length; j++) {
+      if (j === i) continue;
+      const nj = this.problem.pinNets[j];
+      let gj: ReturnType<typeof geometry> | null = null;
+      for (let k = 0; k < nj.length; k++) {
+        if (nj[k] !== net) continue;
+        gj ??= geometry(this.problem.fps[j], layout[j].rot, layout[j].span);
+        const y = gj.pins[k].y + layout[j].y;
+        if (y !== pinY) strips.push(y);
+      }
+    }
+    if (!strips.length) return null;
+    return { dy: this.rng.pick(strips) - pinY };
   }
 
   /** Advance up to `n` iterations. Returns the status after the chunk. */

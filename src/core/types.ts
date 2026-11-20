@@ -145,7 +145,7 @@ export const DEFAULT_WEIGHTS: CostWeights = {
   bounds: 1000,
   area: 1,
   cut: 2,
-  link: 3,
-  linkLength: 0.5,
+  link: 5,
+  linkLength: 1,
   paperTD: 0,
 };
