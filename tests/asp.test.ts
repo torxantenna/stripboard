@@ -75,3 +75,109 @@ describe('ASP solving with clingo-wasm', () => {
     expect(ev.metrics.shorts).toBe(0);
   }, 60000);
 });
+
+describe('full ASP model (placement + cuts + links)', () => {
+  const sa = (id: string, seed = 1) => {
+    const p = ex(id);
+    const best = new Annealer(p, { iterations: 20000, restarts: 1, seed, weights: DEFAULT_WEIGHTS, route: HOLE }).run();
+    return { p, best };
+  };
+
+  it('canonical cuts are electrically identical to the router cuts', async () => {
+    const { canonicalCuts } = await import('../src/asp/encode');
+    for (const id of ['555', 'astable', 'lm386']) {
+      const { p, best } = sa(id);
+      const cuts = canonicalCuts(p, best.layout, best.route.cuts, best.route.links, 'hole');
+      expect(cuts.length).toBeLessThanOrEqual(best.route.cuts.length);
+      expect(verify(p, best.layout, cuts, best.route.links).errors).toEqual([]);
+    }
+  });
+
+  it('centring cuts for display keeps the circuit identical', async () => {
+    const { canonicalCuts, centreCuts } = await import('../src/asp/encode');
+    for (const id of ['555', 'astable', 'lm386']) {
+      const { p, best } = sa(id);
+      for (const mode of ['hole'] as const) {
+        const canon = canonicalCuts(p, best.layout, best.route.cuts, best.route.links, mode);
+        const centred = centreCuts(p, best.layout, canon, best.route.links, mode, p.board.holes);
+        expect(centred).toHaveLength(canon.length);
+        expect(verify(p, best.layout, centred, best.route.links).errors).toEqual([]);
+      }
+    }
+  });
+
+  it('routeFromSolution reproduces the router result', async () => {
+    const { routeFromSolution } = await import('../src/core/solution');
+    const { p, best } = sa('555');
+    const r = routeFromSolution(p, best.layout, best.route.cuts, best.route.links);
+    expect(r.violations).toEqual([]);
+    expect(r.unrouted).toEqual([]);
+    expect(r.links.every((l) => l.net !== '')).toBe(true);
+    expect(new Set(r.segments.map((s) => s.net))).toEqual(new Set(best.route.segments.map((s) => s.net)));
+  });
+
+  it('proves the LED layout optimal, with its own cuts and links', async () => {
+    const { polishWithClingo } = await import('../src/asp/solve');
+    const { p, best } = sa('led');
+    const board = { strips: best.metrics.height + 1, holes: best.metrics.width + 1 };
+    const r = await polishWithClingo(makeProblem(p.netlist, board), { layout: best.layout, cuts: best.route.cuts, links: best.route.links }, {
+      cutMode: 'hole',
+      weights: DEFAULT_WEIGHTS,
+      timeLimit: 20,
+    });
+    expect(r.provenOptimal).toBe(true);
+    expect(r.best.ok).toBe(true);
+    expect(r.best.cost).toBeLessThanOrEqual(best.cost);
+  });
+
+  it('window search never makes a layout worse and every answer verifies', async () => {
+    const { polishWithClingo } = await import('../src/asp/solve');
+    const { p, best } = sa('astable', 2);
+    const board = { strips: best.metrics.height + 1, holes: best.metrics.width + 1 };
+    const pb = makeProblem(p.netlist, board);
+    const seen: boolean[] = [];
+    const r = await polishWithClingo(
+      pb,
+      { layout: best.layout, cuts: best.route.cuts, links: best.route.links },
+      { cutMode: 'hole', weights: DEFAULT_WEIGHTS, timeLimit: 8, seed: 3 },
+      (pr) => seen.push(pr.best.ok),
+    );
+    expect(r.windows).toBeGreaterThan(0);
+    expect(seen.every(Boolean)).toBe(true);
+    expect(r.best.ok).toBe(true);
+    expect(r.best.cost).toBeLessThanOrEqual(best.cost + 1e-9);
+    // and the full-board verifier agrees on the main (larger) board too
+    const v = verify(p, r.best.layout, r.best.cuts, r.best.links);
+    expect(v.errors).toEqual([]);
+  }, 60000);
+
+  it('window search works on a layout that is not anchored at the corner', async () => {
+    const { polishWithClingo } = await import('../src/asp/solve');
+    const { p, best } = sa('led');
+    // shift the whole solution away from (0,0), as a hand-moved layout would be
+    const dx = 2, dy = 3;
+    const shifted = {
+      layout: best.layout.map((q) => ({ ...q, x: q.x + dx, y: q.y + dy })),
+      cuts: best.route.cuts.map((c) => ({ ...c, x: c.x + dx, y: c.y + dy })),
+      links: best.route.links.map((l) => ({ ...l, x: l.x + dx, y1: l.y1 + dy, y2: l.y2 + dy })),
+    };
+    const board = { strips: best.metrics.height + 2, holes: best.metrics.width + 2 };
+    const r = await polishWithClingo(makeProblem(p.netlist, board), shifted, { cutMode: 'hole', weights: DEFAULT_WEIGHTS, timeLimit: 10 });
+    expect(r.provenOptimal).toBe(true);
+    expect(r.best.ok).toBe(true);
+  });
+
+  it('the full model also works with between-hole cuts', async () => {
+    const { polishWithClingo } = await import('../src/asp/solve');
+    const p = ex('555');
+    const best = new Annealer(p, { iterations: 20000, restarts: 1, seed: 1, weights: DEFAULT_WEIGHTS, route: { cutMode: 'between' } }).run();
+    const board = { strips: best.metrics.height + 1, holes: best.metrics.width + 1 };
+    const r = await polishWithClingo(makeProblem(p.netlist, board), { layout: best.layout, cuts: best.route.cuts, links: best.route.links }, {
+      cutMode: 'between',
+      weights: DEFAULT_WEIGHTS,
+      timeLimit: 6,
+    });
+    expect(r.best.ok).toBe(true);
+    expect(r.best.cost).toBeLessThanOrEqual(best.cost + 1e-9);
+  }, 60000);
+});

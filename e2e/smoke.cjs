@@ -63,7 +63,7 @@ const SCALE = Number(process.env.SCALE || 1);
     await page.selectOption('.asp select >> nth=0', model);
     await page.fill('.asp input[type=number]', String(limit));
     const t0 = Date.now();
-    await page.click('text=Solve with clingo');
+    await page.click('.asp button.primary');
     await page.waitForSelector('[data-testid=asp-result]', { timeout: (limit + 60) * 1000 });
     const badge = (await page.textContent('[data-testid=asp-result] .badge')).trim();
     const detail = (await page.textContent('[data-testid=asp-result]')).replace(badge, '').trim();
@@ -76,6 +76,14 @@ const SCALE = Number(process.env.SCALE || 1);
   await aspCase('555', 'paper', 5, 'Not expressible');
   await aspCase('astable', 'paper', 20, 'Unsatisfiable');
   await aspCase('555', 'relaxed', 6, 'Time limit');
+  // Full model: clingo chooses parts, cuts and links; the board must still verify.
+  for (const [ex, limit, expect] of [['led', 10, 'Proven optimal'], ['555', 15, '']]) {
+    await aspCase(ex, 'full', limit, expect);
+    const v = await page.textContent('[data-testid=verify-status]');
+    const own = await page.isVisible('text=Cuts and links chosen by clingo');
+    console.log(`   full/${ex}: board ${v.trim()}, clingo's own cuts/links shown: ${own}`);
+    if (!v.includes('Verified') || !own) failures++;
+  }
 
   // Manual drag: move the first part a few holes and check the cost changes.
   const before = await page.$$eval('table.metrics tr', (rows) => rows.map((r) => r.textContent).join('|'));

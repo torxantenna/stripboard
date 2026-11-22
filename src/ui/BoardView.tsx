@@ -342,9 +342,9 @@ export function BoardView(props: Props) {
         </>
       ) : (
         <>
-          {cuts}
           {links}
           {parts}
+          {cuts}
         </>
       )}
       {ratsnest}

@@ -46,6 +46,42 @@ Findings on the built-in examples:
 - **clingo-wasm ignores `--time-limit`.** The app enforces the limit itself in JavaScript and keeps the best model streamed so far.
 - **The `.lp` button** downloads the exact program, so you can run it with native clingo.
 
+### Full model: placement, cuts and links in ASP (beyond the paper)
+
+The **Full** model (the panel's default) treats the whole layout as one ASP problem. Clingo chooses where every part goes, every track cut and every wire link together.
+
+- **Copper and cuts:** neighbouring holes on a strip are connected unless clingo places a cut there.
+- **Links:** they are vertical, at most `maxlink` strips long, and never pass over pins, bodies or other links.
+- **Correctness by construction.** Each net has a root pin, and connectivity spreads from it through copper and links (`reach/3`). Two rules then hold:
+  - every pin of a net must be reached
+  - no hole may be reached by two nets
+
+  So any answer clingo returns is a complete, buildable layout. Answers are still passed through `verify()`.
+- **Bus strips come free.** Nets can route through otherwise empty strips; the annealer's router can't do this.
+- **The objective is the annealer's weighted cost**, scaled to integers.
+- **Symmetry breaking:**
+  - Each cut must sit directly right of a used hole. Every layout has one equivalent in this form.
+  - The layout is anchored at the corner of the board.
+
+  For display and the build sheet, cuts are moved back to the middle of their gap (`centreCuts`).
+
+Solving a whole board from scratch is too hard for clingo beyond tiny circuits; it found no model for the 555 in 30 s. So **Improve with clingo** does large-neighbourhood search starting from the layout on screen:
+- It frees 2–8 nearby parts, plus all cuts and links within 2 holes of them. Everything else stays fixed.
+- The annealer's solution is supplied as a warm start through `#heuristic`.
+- Clingo solves each window exactly, within 3 s, and an improvement is kept only if it passes `verify()`.
+- The window size adapts: it grows when windows are solved to optimality quickly and shrinks when they time out.
+- If one window covers every part and the whole board and is solved to optimality, the layout is **proven optimal**.
+
+Results after annealing (60k iterations × 3 restarts), then 30 s of clingo windows (`BENCH=1 FULL=1 npm run bench`):
+
+| Circuit | Annealing | + clingo windows | Change |
+|---|---|---|---|
+| LED + resistor | 16 | 16 | **proven optimal** in 0.2 s |
+| 555 flasher | 178 | 167 | −1 cut, −1 link, shorter links |
+| Transistor astable | 146 | 144 | shorter links |
+| TL072 filter | 264 | 255 | −1 cut, −1 link |
+| LM386 amplifier | 219 | 204 | −2 cuts, −2 links |
+
 ## Using it
 
 ```bash
@@ -96,6 +132,7 @@ npm run e2e
 - `npm run bench` reports layout quality and speed for each example.
 - `npm run e2e` drives the built app with Playwright (including the clingo solver) and saves screenshots to `screenshots/`.
 - `BENCH=1 ASP=1 npm run bench` adds the comparison of ASP (relaxed) + router vs annealing.
+- `BENCH=1 FULL=1 npm run bench` runs annealing followed by clingo window search (full model).
 
 Code layout:
 - `src/core`: the engine, pure TypeScript with no DOM.

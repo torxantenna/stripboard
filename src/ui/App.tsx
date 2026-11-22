@@ -1,11 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { randomLayout, type AnnealStatus } from '../core/anneal';
-import { evaluate, isClean } from '../core/cost';
+import { computeMetrics, costOf, evaluate, isClean } from '../core/cost';
+import { routeFromSolution } from '../core/solution';
 import { clampToBoard, FOOTPRINT_HELP, geometry } from '../core/footprints';
 import { parseNetlist } from '../core/netlist/parse';
 import { autoBoardSize, makeProblem } from '../core/problem';
 import { Rng } from '../core/rng';
-import { DEFAULT_WEIGHTS, type BoardSize, type CostWeights, type CutMode, type Layout, type Netlist, type Placement } from '../core/types';
+import {
+  DEFAULT_WEIGHTS,
+  type BoardSize,
+  type CostWeights,
+  type Cut,
+  type CutMode,
+  type Layout,
+  type Link,
+  type Netlist,
+  type Placement,
+} from '../core/types';
 import { verify } from '../core/verify';
 import { EXAMPLES } from '../examples';
 import type { StartMessage, WorkerMessage } from '../worker/protocol';
@@ -37,10 +48,20 @@ const DEFAULT_SETTINGS: Settings = {
   weights: DEFAULT_WEIGHTS,
 };
 
+/** Cuts and links chosen by clingo for one exact layout; used until the layout changes. */
+interface FixedRoute {
+  key: string;
+  cuts: Cut[];
+  links: Link[];
+}
+
+const layoutKey = (l: Layout) => JSON.stringify(l.map((p) => [p.x, p.y, p.rot, p.span]));
+
 interface Saved {
   source: string;
   placements: Record<string, Placement>;
   settings: Settings;
+  fixedRoute?: FixedRoute | null;
 }
 
 function loadSaved(): Saved | null {
@@ -71,6 +92,7 @@ export function App() {
   const [source, setSource] = useState(saved?.source ?? EXAMPLES[1].source);
   const [settings, setSettings] = useState<Settings>(saved?.settings ?? DEFAULT_SETTINGS);
   const [placements, setPlacements] = useState<Record<string, Placement>>(saved?.placements ?? {});
+  const [fixedRoute, setFixedRoute] = useState<FixedRoute | null>(saved?.fixedRoute ?? null);
   const [side, setSide] = useState<Side>('component');
   const [zoom, setZoom] = useState<'fit' | number>('fit');
   const [selected, setSelected] = useState<number | null>(null);
@@ -118,10 +140,16 @@ export function App() {
   }, [problem, placements, settings.seed]);
 
   const routeOpts = useMemo(() => ({ cutMode: settings.cutMode }), [settings.cutMode]);
-  const evaluation = useMemo(
-    () => (problem && layout ? evaluate(problem, layout, routeOpts, settings.weights) : null),
-    [problem, layout, routeOpts, settings.weights],
-  );
+  const usingFixedRoute = !!(layout && fixedRoute && fixedRoute.key === layoutKey(layout));
+  const evaluation = useMemo(() => {
+    if (!problem || !layout) return null;
+    if (fixedRoute && fixedRoute.key === layoutKey(layout)) {
+      const route = routeFromSolution(problem, layout, fixedRoute.cuts, fixedRoute.links);
+      const metrics = computeMetrics(problem, layout, route);
+      return { route, metrics, cost: costOf(metrics, settings.weights) };
+    }
+    return evaluate(problem, layout, routeOpts, settings.weights);
+  }, [problem, layout, routeOpts, settings.weights, fixedRoute]);
   const verification = useMemo(
     () => (problem && layout && evaluation ? verify(problem, layout, evaluation.route.cuts, evaluation.route.links) : null),
     [problem, layout, evaluation],
@@ -131,13 +159,13 @@ export function App() {
   useEffect(() => {
     const t = setTimeout(() => {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ source, placements, settings } satisfies Saved));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ source, placements, settings, fixedRoute } satisfies Saved));
       } catch {
         /* storage unavailable: fine */
       }
     }, 300);
     return () => clearTimeout(t);
-  }, [source, placements, settings]);
+  }, [source, placements, settings, fixedRoute]);
 
   // --- optimiser ---------------------------------------------------------------
   const stop = useCallback(() => {
@@ -317,6 +345,7 @@ export function App() {
     if (!ex) return;
     stop();
     setPlacements({});
+    setFixedRoute(null);
     setSelected(null);
     setSettings((s) => ({ ...s, boardMode: 'auto' }));
     autoRun.current = true;
@@ -332,7 +361,7 @@ export function App() {
   const exportPng = async () => svgRef.current && downloadBlob(await svgToPng(svgRef.current), `stripboard-${side}.png`);
   const exportSheet = () => sheet && downloadText(buildSheetText(sheet), 'stripboard-build-sheet.txt');
   const saveProject = () =>
-    downloadText(JSON.stringify({ format: 'stripboard-project', version: 1, source, placements, settings }, null, 2), 'stripboard-project.json', 'application/json');
+    downloadText(JSON.stringify({ format: 'stripboard-project', version: 1, source, placements, settings, fixedRoute }, null, 2), 'stripboard-project.json', 'application/json');
   const loadProject = async (file: File) => {
     try {
       const data = JSON.parse(await file.text());
@@ -340,6 +369,7 @@ export function App() {
       stop();
       setSource(data.source);
       setPlacements(data.placements ?? {});
+      setFixedRoute(data.fixedRoute ?? null);
       setSettings({ ...DEFAULT_SETTINGS, ...data.settings, weights: { ...DEFAULT_WEIGHTS, ...data.settings?.weights } });
     } catch (e) {
       alert(`Could not load project: ${(e as Error).message}`);
@@ -608,6 +638,7 @@ export function App() {
               <div className={`badge ${clean ? 'ok' : 'bad'}`} data-testid="verify-status">
                 {clean ? 'Verified ✓' : 'Not buildable yet ✗'}
               </div>
+              {usingFixedRoute && <p className="small">Cuts and links chosen by clingo.</p>}
               {!clean && (
                 <ul className="messages errors">
                   {evaluation!.route.violations.slice(0, 6).map((v, i) => (
@@ -665,7 +696,15 @@ export function App() {
             weights={settings.weights}
             sa={saSnap}
             disabled={running}
-            onShow={(l) => applyLayout(problem.netlist.components.map((c) => c.ref), l)}
+            current={
+              layout && evaluation && verification
+                ? { layout, cuts: evaluation.route.cuts, links: evaluation.route.links, ok: isClean(evaluation.metrics) && verification.ok }
+                : null
+            }
+            onShow={(l, sol) => {
+              applyLayout(problem.netlist.components.map((c) => c.ref), l);
+              setFixedRoute(sol ? { key: layoutKey(l), cuts: sol.cuts, links: sol.links } : null);
+            }}
           />
         )}
 
