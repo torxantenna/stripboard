@@ -114,7 +114,23 @@ Pins that can't be reached are reported as unrouted, so the annealer's penalty s
 
 The clingo panel applies to stripboard only and is hidden on perfboard.
 
-Annealing defaults to 20k iterations on perfboard, because routing is a maze search. To compare the wiring options on every example, run `BENCH=1 PERF=1 ITERS=20000 npm run bench`.
+Annealing defaults to 20k iterations on perfboard, because routing is a maze search. Results with 20k iterations × 3 restarts (`BENCH=1 PERF=1 ITERS=20000 npm run bench`). Each cell is board area · trace steps · jumpers, then cost. Every layout passes `verifyPerfboard`.
+
+| Circuit | Traces only | Traces + straight | Traces + angled | Point-to-point |
+|---|---|---|---|---|
+| LED + resistor | 10 · 4 · 0 (12) | 10 · 4 · 0 (12) | 10 · 4 · 0 (12) | 10 · 0 · 3 (28) |
+| 555 flasher | 72 · 52 · 0 (98) | 80 · 42 · 2 (116) | **54 · 34 · 2 (87)** | 49 · 0 · 15 (157) |
+| Transistor astable | 84 · 47 · 0 (108) | **80 · 32 · 0 (96)** | 64 · 30 · 2 (98) | 63 · 0 · 16 (170) |
+| TL072 filter | 143 · 80 · 0 (183) | 144 · 86 · 1 (194) | **100 · 61 · 2 (150)** | 104 · 0 · 25 (279) |
+| LM386 amplifier | 90 · 53 · 0 (117) | 98 · 49 · 1 (130) | **72 · 43 · 2 (115)** | 78 · 0 · 21 (229) |
+
+Findings:
+- Angled jumpers give the cheapest layouts. One or two insulated wires let the traces pack much tighter.
+- Straight jumpers often don't beat traces alone on these circuits. A trace route nearly always exists, and the extra moves make annealing noisier.
+- Point-to-point gives the smallest boards but needs 15–25 wires.
+- Per iteration, perfboard routing costs about 7–25× stripboard: 45–550 µs against about 20 µs.
+  - Point-to-point is the cheapest perfboard option and straight jumpers the most expensive.
+  - The app spreads restarts over Web Workers, so a default run takes a few seconds to about 10 s.
 
 ## Using it
 
