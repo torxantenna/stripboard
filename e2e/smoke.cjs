@@ -1,6 +1,7 @@
 // End-to-end smoke test: `npm run build && npx vite preview --port 4173` then `node e2e/smoke.cjs`.
 // Loads every example, waits for the optimiser to produce a verified layout, screenshots both
-// board sides, drags a part and checks the metrics update.
+// board sides, drags a part and checks the metrics update, then repeats on perfboard with
+// traces + jumpers and with point-to-point wiring.
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
@@ -98,6 +99,46 @@ const SCALE = Number(process.env.SCALE || 1);
   console.log(`drag: metrics ${before === after ? 'UNCHANGED' : 'changed'}; status bar: ${selected.trim()}`);
   if (before === after) failures++;
   await page.screenshot({ path: path.join(OUT, `after-drag.png`), fullPage: true });
+
+  // Perfboard: traces + straight jumpers (default options), then point-to-point wiring.
+  const runIdNow = async () => Number((await page.getAttribute('.progress', 'data-run').catch(() => '0')) || 0);
+  const waitDone = (prev) =>
+    page.waitForFunction(
+      (p) => {
+        const el = document.querySelector('.progress');
+        return el && Number(el.getAttribute('data-run')) > p && el.getAttribute('data-done') === 'yes';
+      },
+      prev,
+      { timeout: 180000 },
+    );
+  const perfCase = async (example, label) => {
+    const prev = await runIdNow();
+    const t0 = Date.now();
+    if (example) await page.selectOption('select[aria-label="Load example"]', example);
+    else await page.click('button:has-text("Optimise")');
+    await waitDone(prev);
+    const status = await page.textContent('[data-testid=verify-status]');
+    const metrics = await page.$$eval('table.metrics tr', (rows) => rows.map((r) => r.textContent).join(' | '));
+    const sheet = await page.textContent('.sheet summary');
+    const asp = await page.isVisible('.asp');
+    console.log(`perfboard ${label}: ${status} in ${((Date.now() - t0) / 1000).toFixed(1)}s — ${metrics} — ${sheet.trim()}${asp ? ' (ASP panel VISIBLE)' : ''}`);
+    if (!status.includes('Verified') || asp || /cuts/.test(sheet)) failures++;
+    const name = `perfboard-${label.replace(/\W+/g, '-')}`;
+    await page.screenshot({ path: path.join(OUT, `${name}-component.png`), fullPage: true });
+    await page.click('text=Copper side');
+    await page.locator('svg.board').screenshot({ path: path.join(OUT, `${name}-copper.png`) });
+    await page.click('text=Component side');
+  };
+  await page.click('[aria-label="Board type"] button:has-text("Perfboard")');
+  // (555 is already loaded, and re-selecting it would not start a run.)
+  for (const ex of ['lm386', '555']) await perfCase(ex, `${ex} traces+jumpers`);
+  await page.selectOption('label:has-text("Jumper wires") select', 'angled');
+  await perfCase(null, '555 traces+angled');
+  await page.uncheck('label:has-text("Solder-side traces") input');
+  await perfCase(null, '555 point-to-point');
+  await page.check('label:has-text("Solder-side traces") input');
+  await page.selectOption('label:has-text("Jumper wires") select', 'straight');
+  await page.click('[aria-label="Board type"] button:has-text("Stripboard")');
 
   // Phone width: no horizontal page scroll.
   await page.setViewportSize({ width: 390, height: 844 });

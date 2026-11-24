@@ -68,10 +68,49 @@ export interface Link {
   y2: number;
 }
 
+/**
+ * A solder-side trace or a perfboard jumper wire, from hole (x1, y1) to hole (x2, y2).
+ * Traces are always horizontal or vertical and solder every hole they pass through;
+ * jumpers only touch their two end holes.
+ */
+export interface Wire {
+  net: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
 export type CutMode = 'hole' | 'between';
+
+/** Stripboard: copper strips joined along each row. Perfboard: an isolated pad per hole. */
+export type BoardType = 'stripboard' | 'perfboard';
+
+/**
+ * - `none`: no jumper wires.
+ * - `straight`: bare wire, horizontal or vertical on the component side; may not pass over
+ *   pins, bodies or other jumpers, and ends in free holes.
+ * - `angled`: insulated wire between any two holes; may cross anything and may end on a pad
+ *   of its own net (point-to-point wiring).
+ */
+export type JumperMode = 'none' | 'straight' | 'angled';
+
+export interface PerfOptions {
+  /** Allow solder-side traces (solder bridges / bare wire along the hole grid). */
+  traces: boolean;
+  jumpers: JumperMode;
+  /** Longest jumper, in hole pitches (Euclidean for angled jumpers). */
+  maxJumper: number;
+}
+
+export const DEFAULT_PERF: PerfOptions = { traces: true, jumpers: 'straight', maxJumper: 10 };
 
 export interface RouteOptions {
   cutMode: CutMode;
+  /** Defaults to `stripboard`. */
+  board?: BoardType;
+  /** Perfboard wiring options; defaults to `DEFAULT_PERF`. */
+  perf?: PerfOptions;
 }
 
 export type ViolationType = 'short' | 'overlap' | 'bounds';
@@ -104,6 +143,10 @@ export interface Segment {
 export interface RouteResult {
   cuts: Cut[];
   links: Link[];
+  /** Perfboard only: solder-side traces (empty on stripboard). */
+  traces?: Wire[];
+  /** Perfboard only: jumper wires (empty on stripboard). */
+  jumpers?: Wire[];
   segments: Segment[];
   unrouted: Unrouted[];
   violations: Violation[];
@@ -111,8 +154,11 @@ export interface RouteResult {
 
 export interface Metrics {
   cuts: number;
+  /** Wire links (stripboard) or jumpers (perfboard). */
   links: number;
   linkLength: number;
+  /** Perfboard: hole-to-hole steps of solder-side trace. */
+  traceLength: number;
   unrouted: number;
   shorts: number;
   overlaps: number;
@@ -135,6 +181,8 @@ export interface CostWeights {
   cut: number;
   link: number;
   linkLength: number;
+  /** Perfboard: per hole-to-hole step of solder-side trace. */
+  trace: number;
   paperTD: number;
 }
 
@@ -147,5 +195,6 @@ export const DEFAULT_WEIGHTS: CostWeights = {
   cut: 2,
   link: 5,
   linkLength: 1,
+  trace: 0.5,
   paperTD: 0,
 };

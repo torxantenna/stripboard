@@ -54,3 +54,29 @@ it.runIf(env.BENCH && env.FULL)('bench: annealing then clingo window search (ful
     console.log(`${ex.name.padEnd(22)} SA cost ${sa.cost.toFixed(0)} [${fmt(sa.metrics)}] -> clingo ${b.cost.toFixed(0)} [${fmt(b.metrics)}] verified ${b.ok} · ${r.windows} windows, ${r.improvements} improvements, ${r.seconds.toFixed(0)}s${r.provenOptimal ? ' (proven optimal)' : ''}`);
   }
 }, 900000);
+
+it.runIf(env.BENCH && env.PERF)('bench: perfboard annealing per wiring option', async () => {
+  const { verifyRoute } = await import('../src/core/verify');
+  const { DEFAULT_PERF } = await import('../src/core/types');
+  const variants = [
+    { name: 'traces+straight', perf: DEFAULT_PERF },
+    { name: 'traces only', perf: { ...DEFAULT_PERF, jumpers: 'none' as const } },
+    { name: 'traces+angled', perf: { ...DEFAULT_PERF, jumpers: 'angled' as const } },
+    { name: 'point-to-point', perf: { traces: false, jumpers: 'angled' as const, maxJumper: 10 } },
+  ];
+  for (const ex of EXAMPLES) {
+    if (env.EX && env.EX !== ex.id) continue;
+    const p = makeProblem(parseNetlist(ex.source).netlist!);
+    for (const v of variants) {
+      if (env.VAR && env.VAR !== v.name) continue;
+      const route = { cutMode: 'hole' as const, board: 'perfboard' as const, perf: v.perf };
+      const iters = Number(env.ITERS ?? 60000), restarts = Number(env.RESTARTS ?? 3);
+      const t = performance.now();
+      const b = new Annealer(p, { iterations: iters, restarts, seed: Number(env.SEED ?? 1), weights: { ...DEFAULT_WEIGHTS, trace: Number(env.WTRACE ?? DEFAULT_WEIGHTS.trace) }, route }).run();
+      const ms = performance.now() - t;
+      const m = b.metrics;
+      const ok = verifyRoute(p, b.layout, b.route, route).ok;
+      console.log(`${ex.name.padEnd(22)} ${v.name.padEnd(16)} ${m.height}x${m.width}=${m.area} trace ${m.traceLength} jumpers ${m.links} (len ${m.linkLength.toFixed(1)}) unrouted ${m.unrouted} cost ${b.cost.toFixed(1)} verify ${ok} ${(ms / 1000).toFixed(1)}s ${((ms * 1000) / (iters * restarts)).toFixed(1)}us/it`);
+    }
+  }
+}, 900000);

@@ -1,13 +1,14 @@
 import { geometry } from './footprints';
 import type { Problem } from './problem';
-import type { Cut, Hole, Layout, Link, RouteOptions, RouteResult, Segment, Unrouted, Violation } from './types';
+import { routePerfboard } from './perfroute';
+import { DEFAULT_PERF, DEFAULT_WEIGHTS, type CostWeights, type Cut, type Hole, type Layout, type Link, type RouteOptions, type RouteResult, type Segment, type Unrouted, type Violation } from './types';
 
-const EMPTY = -2;
-const NC = -1;
+export const EMPTY = -2;
+export const NC = -1;
 
 /** Occupancy flags per hole. */
-const F_PIN = 1;
-const F_BODY = 2;
+export const F_PIN = 1;
+export const F_BODY = 2;
 const F_LINK = 4; // a link wire passes over / ends at this hole
 const F_LINK_END = 8; // a link is soldered here
 
@@ -59,19 +60,16 @@ class UnionFind {
 
 export { UnionFind };
 
-/**
- * Derive track cuts and wire links for a placement.
- *
- * 1. Lay all pins and bodies on an occupancy grid; flag overlaps and out-of-board parts.
- * 2. On each strip, group consecutive pins of the same net into runs. Every change of net
- *    between neighbouring runs needs one cut in the gap between them.
- * 3. For each net with runs on several strips, join the runs with vertical wire links
- *    (Kruskal over run pairs, shortest links first). A link's ends must be free holes in
- *    each run's copper, its path must not cross pins, bodies or other links, and each gap
- *    must keep a cuttable hole between the two sides.
- * 4. Place one cut in each gap.
- */
-export function route(problem: Problem, layout: Layout, opts: RouteOptions): RouteResult {
+/** Per-hole occupancy of a placement, with overlap and off-board problems. */
+export interface Occupancy {
+  /** F_PIN / F_BODY flags per hole. */
+  flags: Uint8Array;
+  /** Net index of the pin in each hole, NC (-1) for an unconnected pin, EMPTY (-2) for none. */
+  pinNet: Int32Array;
+  violations: Violation[];
+}
+
+export function occupancy(problem: Problem, layout: Layout): Occupancy {
   const { holes: W, strips: H } = problem.board;
   const N = W * H;
   const flags = new Uint8Array(N);
@@ -79,8 +77,6 @@ export function route(problem: Problem, layout: Layout, opts: RouteOptions): Rou
   const pinCount = new Uint8Array(N);
   const bodyCount = new Uint8Array(N);
   const violations: Violation[] = [];
-
-  // --- 1. occupancy -------------------------------------------------------
   for (let ci = 0; ci < layout.length; ci++) {
     const pl = layout[ci];
     const g = geometry(problem.fps[ci], pl.rot, pl.span);
@@ -122,6 +118,34 @@ export function route(problem: Problem, layout: Layout, opts: RouteOptions): Rou
       });
     }
   }
+  return { flags, pinNet, violations };
+}
+
+/**
+ * Route a placement on the board type in `opts` (stripboard by default). On perfboard the
+ * weights steer the choice between traces and jumpers.
+ */
+export function route(problem: Problem, layout: Layout, opts: RouteOptions, weights: CostWeights = DEFAULT_WEIGHTS): RouteResult {
+  if (opts.board === 'perfboard') return routePerfboard(problem, layout, opts.perf ?? DEFAULT_PERF, weights);
+  return routeStripboard(problem, layout, opts);
+}
+
+/**
+ * Derive track cuts and wire links for a placement.
+ *
+ * 1. Lay all pins and bodies on an occupancy grid; flag overlaps and out-of-board parts.
+ * 2. On each strip, group consecutive pins of the same net into runs. Every change of net
+ *    between neighbouring runs needs one cut in the gap between them.
+ * 3. For each net with runs on several strips, join the runs with vertical wire links
+ *    (Kruskal over run pairs, shortest links first). A link's ends must be free holes in
+ *    each run's copper, its path must not cross pins, bodies or other links, and each gap
+ *    must keep a cuttable hole between the two sides.
+ * 4. Place one cut in each gap.
+ */
+export function routeStripboard(problem: Problem, layout: Layout, opts: RouteOptions): RouteResult {
+  const { holes: W, strips: H } = problem.board;
+  // --- 1. occupancy -------------------------------------------------------
+  const { flags, pinNet, violations } = occupancy(problem, layout);
 
   // --- 2. runs and gaps -----------------------------------------------------
   const runs: Run[] = [];

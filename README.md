@@ -2,6 +2,8 @@
 
 A browser app that turns a netlist into a buildable **stripboard (Veroboard) layout**. It chooses component positions and orientations, then works out the **track cuts** and **wire links**, so you get a layout you can solder from a printed build sheet.
 
+It also lays out **perfboard** (an isolated pad per hole), wiring it with solder-side traces, jumper wires, or point-to-point insulated wire. See [Perfboard](#perfboard).
+
 It runs entirely client-side (Vite + React + TypeScript). The optimiser runs in Web Workers, so a static host such as GitHub Pages is enough.
 
 ## Background
@@ -82,6 +84,38 @@ Results after annealing (60k iterations × 3 restarts), then 30 s of clingo wind
 | TL072 filter | 264 | 255 | −1 cut, −1 link |
 | LM386 amplifier | 219 | 204 | −2 cuts, −2 links |
 
+## Perfboard
+
+Choose **Perfboard** under Settings. Every hole is then an isolated pad: nothing is connected until you wire it, and there are no track cuts. You choose which kinds of wiring the optimiser may use:
+
+- **Solder-side traces** (on by default): runs of solder bridges or bare tinned wire along the hole grid.
+  - Traces only go horizontally or vertically from hole to hole, and every hole they pass is soldered.
+  - So traces of different nets can never cross or share a hole.
+  - They may pass under a part's body, but not through another net's pin.
+- **Jumper wires**, one of:
+  - **None.**
+  - **Straight** (default): bare wire on the component side, horizontal or vertical, ending in free holes next to the traces. Like stripboard links, they can't pass over pins, bodies or other jumpers.
+  - **Any angle**: insulated wire between any two holes, ending on a pad or trace of its net. These may cross anything. With traces switched off, this is classic **point-to-point** wiring, pad to pad.
+- **Longest jumper** caps jumper length (in holes, straight-line for angled wires).
+
+On perfboard, DIPs may also turn 90°, because there are no strips to short their pin rows.
+
+**Router** (`src/core/perfroute.ts`). Nets are routed shortest first. Each net grows a tree from one pin and joins its nearest unconnected pin with the cheapest of:
+- an A* trace path. Bends and holes outside the parts' bounding box cost a little extra, so traces stay tidy and the board stays small.
+- if the pin can't be reached by traces, or only by a long detour, a route that also uses straight jumpers.
+- an angled jumper straight to the pin.
+
+Pins that can't be reached are reported as unrouted, so the annealer's penalty steers placement away from them. Costs come from the same weights as the annealer's: **Trace (per hole step)**, **Jumper wire** and **Jumper length**.
+
+**Verifier.** `verifyPerfboard` checks the result independently:
+- It treats holes as union-find nodes. Each trace joins every hole along it, and each jumper joins its two ends.
+- It compares the connectivity with the netlist: no shorts, no opens.
+- It also checks the physical rules of the chosen options.
+
+The clingo panel applies to stripboard only and is hidden on perfboard.
+
+Annealing defaults to 20k iterations on perfboard, because routing is a maze search. To compare the wiring options on every example, run `BENCH=1 PERF=1 ITERS=20000 npm run bench`.
+
 ## Using it
 
 ```bash
@@ -92,7 +126,7 @@ npm install
 npm run dev
 ```
 
-Pick an example or type a netlist, then press **Optimise**. Drag parts to adjust the layout by hand: <kbd>R</kbd> rotates, <kbd>[</kbd>/<kbd>]</kbd> changes the lead span, and the arrow keys nudge. **Refine current** anneals gently, starting from your edits. Use **Copper side** to see the mirrored view you will cut from. Export as SVG/PNG, a text build sheet, or a JSON project.
+Pick an example or type a netlist, choose **Stripboard** or **Perfboard** under Settings, then press **Optimise**. Drag parts to adjust the layout by hand: <kbd>R</kbd> rotates, <kbd>[</kbd>/<kbd>]</kbd> changes the lead span, and the arrow keys nudge. **Refine current** anneals gently, starting from your edits. Use **Copper side** to see the mirrored view you will cut from. Export as SVG/PNG, a text build sheet, or a JSON project.
 
 ### Netlist format
 
@@ -127,15 +161,16 @@ npx vite preview --port 4173 &
 npm run e2e
 ```
 
-- `npm test` runs the unit tests: parser, footprints, router, verifier, a router-vs-verifier property test, and annealing on every example.
+- `npm test` runs the unit tests: parser, footprints, router, verifier, a router-vs-verifier property test, and annealing on every example, for stripboard and for perfboard (each wiring option).
 - `npm run build` typechecks and builds into `dist/`.
 - `npm run bench` reports layout quality and speed for each example.
-- `npm run e2e` drives the built app with Playwright (including the clingo solver) and saves screenshots to `screenshots/`.
+- `npm run e2e` drives the built app with Playwright (including the clingo solver and perfboard mode) and saves screenshots to `screenshots/`.
 - `BENCH=1 ASP=1 npm run bench` adds the comparison of ASP (relaxed) + router vs annealing.
 - `BENCH=1 FULL=1 npm run bench` runs annealing followed by clingo window search (full model).
+- `BENCH=1 PERF=1 npm run bench` anneals every example on perfboard under each wiring option (`ITERS`, `RESTARTS`, `EX`, `VAR` narrow it).
 
 Code layout:
-- `src/core`: the engine, pure TypeScript with no DOM.
+- `src/core`: the engine, pure TypeScript with no DOM. `route.ts` is the stripboard router and `perfroute.ts` the perfboard router; `verify.ts` has a verifier for each.
 - `src/asp`: the ASP encoding and the clingo-wasm wrapper.
 - `src/worker`: the Web Worker wrapper.
 - `src/ui`: the React app.

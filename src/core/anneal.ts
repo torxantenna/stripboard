@@ -1,9 +1,9 @@
 import { costOf, computeMetrics, evaluate, type Evaluation } from './cost';
-import { clampToBoard, geometry } from './footprints';
+import { clampToBoard, geometry, rotationsFor } from './footprints';
 import { cloneLayout, type Problem } from './problem';
 import { Rng } from './rng';
 import { route } from './route';
-import type { CostWeights, Layout, Placement, RouteOptions } from './types';
+import type { BoardType, CostWeights, Layout, Placement, RouteOptions } from './types';
 
 export interface AnnealSettings {
   /** Iterations per restart. */
@@ -34,7 +34,7 @@ export interface AnnealBest extends Evaluation {
 }
 
 /** Random placement that avoids overlaps where it easily can; biggest parts first. */
-export function randomLayout(problem: Problem, rng: Rng): Layout {
+export function randomLayout(problem: Problem, rng: Rng, board?: BoardType): Layout {
   const { holes: W, strips: H } = problem.board;
   const used = new Uint8Array(W * H);
   const n = problem.fps.length;
@@ -44,7 +44,7 @@ export function randomLayout(problem: Problem, rng: Rng): Layout {
     const fp = problem.fps[ci];
     let best: Placement | null = null;
     for (let attempt = 0; attempt < 60; attempt++) {
-      const rot = rng.pick(fp.rotations);
+      const rot = rng.pick(rotationsFor(fp, board));
       const span = rng.pick(fp.spans);
       const g = geometry(fp, rot, span);
       if (g.w > W || g.h > H) continue;
@@ -120,7 +120,7 @@ export class Annealer {
   }
 
   private cost(layout: Layout): number {
-    const r = route(this.problem, layout, this.settings.route);
+    const r = route(this.problem, layout, this.settings.route, this.settings.weights);
     return costOf(computeMetrics(this.problem, layout, r), this.settings.weights);
   }
 
@@ -128,7 +128,7 @@ export class Annealer {
     const init =
       this.restart === 0 && this.settings.initial
         ? cloneLayout(this.settings.initial)
-        : randomLayout(this.problem, this.rng);
+        : randomLayout(this.problem, this.rng, this.settings.route.board);
     this.cur = init.map((p, i) => clampToBoard(this.problem.fps[i], p, this.problem.board.holes, this.problem.board.strips));
     this.curCost = this.cost(this.cur);
     this.iter = 0;
@@ -189,8 +189,9 @@ export class Annealer {
         p.y += rng.int(-r, r);
       } while (p.x === from[i].x && p.y === from[i].y && r > 0 && rng.next() < 0.9);
     } else if (roll < 0.67) {
-      if (fp.rotations.length > 1) {
-        const others = fp.rotations.filter((x) => x !== p.rot);
+      const rots = rotationsFor(fp, this.settings.route.board);
+      if (rots.length > 1) {
+        const others = rots.filter((x) => x !== p.rot);
         // Rotate about the part's centre so small moves stay local.
         const g0 = geometry(fp, p.rot, p.span);
         p.rot = rng.pick(others);
@@ -217,7 +218,7 @@ export class Annealer {
       q.y = tmp.y;
       next[j] = clampToBoard(this.problem.fps[j], q, W, H);
     } else {
-      p.rot = rng.pick(fp.rotations);
+      p.rot = rng.pick(rotationsFor(fp, this.settings.route.board));
       p.span = rng.pick(fp.spans);
       const g = geometry(fp, p.rot, p.span);
       p.x = rng.int(0, Math.max(0, W - g.w));

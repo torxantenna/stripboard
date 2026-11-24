@@ -1,4 +1,4 @@
-import type { Hole, Placement, Rotation } from './types';
+import type { BoardType, Hole, Placement, Rotation } from './types';
 
 /** Geometry of a footprint at a given rotation and span, normalised so its bounding box starts at (0,0). */
 export interface Geometry {
@@ -185,6 +185,14 @@ export function parseFootprint(specRaw: string): Footprint {
         `unknown footprint "${specRaw}" (known: axial, radial, dipN, sipN, headerN, inline, to92, to220, pot, pad)`,
       );
   }
+}
+
+/**
+ * Rotations a part may take on a board type. Stripboard restricts some parts (a DIP must
+ * straddle the strips); on perfboard every pad is isolated, so any multi-pin part may turn.
+ */
+export function rotationsFor(fp: Footprint, board: BoardType | undefined): Rotation[] {
+  return board === 'perfboard' && fp.pinCount > 1 ? ALL_ROTATIONS : fp.rotations;
 }
 
 const fpCache = new Map<string, Footprint>();

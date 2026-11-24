@@ -25,6 +25,17 @@ export function computeMetrics(problem: Problem, layout: Layout, r: RouteResult)
     y0 = Math.min(y0, l.y1, l.y2);
     y1 = Math.max(y1, l.y1, l.y2);
   }
+  const jumpers = r.jumpers ?? [];
+  const traces = r.traces ?? [];
+  let traceLength = 0;
+  for (const w of jumpers) linkLength += Math.hypot(w.x2 - w.x1, w.y2 - w.y1);
+  for (const w of traces) traceLength += Math.abs(w.x2 - w.x1) + Math.abs(w.y2 - w.y1);
+  for (const w of [...jumpers, ...traces]) {
+    x0 = Math.min(x0, w.x1, w.x2);
+    x1 = Math.max(x1, w.x1, w.x2);
+    y0 = Math.min(y0, w.y1, w.y2);
+    y1 = Math.max(y1, w.y1, w.y2);
+  }
   if (!Number.isFinite(x0)) x0 = y0 = x1 = y1 = 0;
   const width = x1 - x0 + 1;
   const height = y1 - y0 + 1;
@@ -38,8 +49,9 @@ export function computeMetrics(problem: Problem, layout: Layout, r: RouteResult)
   }
   return {
     cuts: r.cuts.length,
-    links: r.links.length,
+    links: r.links.length + jumpers.length,
     linkLength,
+    traceLength,
     unrouted: r.unrouted.length,
     shorts,
     overlaps,
@@ -62,6 +74,7 @@ export function costOf(m: Metrics, w: CostWeights): number {
     w.cut * m.cuts +
     w.link * m.links +
     w.linkLength * m.linkLength +
+    w.trace * m.traceLength +
     w.paperTD * m.paperTD
   );
 }
@@ -73,7 +86,7 @@ export interface Evaluation {
 }
 
 export function evaluate(problem: Problem, layout: Layout, opts: RouteOptions, weights: CostWeights): Evaluation {
-  const r = route(problem, layout, opts);
+  const r = route(problem, layout, opts, weights);
   const metrics = computeMetrics(problem, layout, r);
   return { route: r, metrics, cost: costOf(metrics, weights) };
 }

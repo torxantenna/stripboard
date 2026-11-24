@@ -2,13 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { randomLayout, type AnnealStatus } from '../core/anneal';
 import { computeMetrics, costOf, evaluate, isClean } from '../core/cost';
 import { routeFromSolution } from '../core/solution';
-import { clampToBoard, FOOTPRINT_HELP, geometry } from '../core/footprints';
+import { clampToBoard, FOOTPRINT_HELP, geometry, rotationsFor } from '../core/footprints';
 import { parseNetlist } from '../core/netlist/parse';
 import { autoBoardSize, makeProblem } from '../core/problem';
 import { Rng } from '../core/rng';
 import {
+  DEFAULT_PERF,
   DEFAULT_WEIGHTS,
   type BoardSize,
+  type BoardType,
+  type JumperMode,
+  type PerfOptions,
   type CostWeights,
   type Cut,
   type CutMode,
@@ -17,7 +21,7 @@ import {
   type Netlist,
   type Placement,
 } from '../core/types';
-import { verify } from '../core/verify';
+import { verifyRoute } from '../core/verify';
 import { EXAMPLES } from '../examples';
 import type { StartMessage, WorkerMessage } from '../worker/protocol';
 import { AspPanel, type Snapshot } from './AspPanel';
@@ -33,16 +37,23 @@ interface Settings {
   restarts: number;
   seed: number;
   cutMode: CutMode;
+  boardType: BoardType;
+  perf: PerfOptions;
   boardMode: 'auto' | 'custom';
   customBoard: BoardSize;
   weights: CostWeights;
 }
 
+/** Default annealing iterations per board type (perfboard routing is a maze search, so slower). */
+const DEFAULT_ITERATIONS: Record<BoardType, number> = { stripboard: 60000, perfboard: 20000 };
+
 const DEFAULT_SETTINGS: Settings = {
-  iterations: 60000,
+  iterations: DEFAULT_ITERATIONS.stripboard,
   restarts: 3,
   seed: 1,
   cutMode: 'hole',
+  boardType: 'stripboard',
+  perf: DEFAULT_PERF,
   boardMode: 'auto',
   customBoard: { strips: 20, holes: 30 },
   weights: DEFAULT_WEIGHTS,
@@ -70,22 +81,43 @@ function loadSaved(): Saved | null {
     if (!raw) return null;
     const s = JSON.parse(raw) as Saved;
     if (typeof s.source !== 'string') return null;
-    return { ...s, settings: { ...DEFAULT_SETTINGS, ...s.settings, weights: { ...DEFAULT_WEIGHTS, ...s.settings?.weights } } };
+    return { ...s, settings: mergeSettings(s.settings) };
   } catch {
     return null;
   }
 }
 
-const WEIGHT_LABELS: [keyof CostWeights, string][] = [
-  ['area', 'Board area (per hole)'],
-  ['cut', 'Track cut'],
-  ['link', 'Wire link'],
-  ['linkLength', 'Link length (per strip)'],
-  ['paperTD', 'Paper TD (per strip)'],
-  ['unrouted', 'Unrouted connection'],
-  ['short', 'Short'],
-  ['overlap', 'Overlap'],
-];
+/** Fill in settings saved by older versions (or partial project files) with defaults. */
+function mergeSettings(saved: Partial<Settings> | undefined): Settings {
+  return {
+    ...DEFAULT_SETTINGS,
+    ...saved,
+    perf: { ...DEFAULT_PERF, ...saved?.perf },
+    weights: { ...DEFAULT_WEIGHTS, ...saved?.weights },
+  };
+}
+
+const WEIGHT_LABELS: Record<BoardType, [keyof CostWeights, string][]> = {
+  stripboard: [
+    ['area', 'Board area (per hole)'],
+    ['cut', 'Track cut'],
+    ['link', 'Wire link'],
+    ['linkLength', 'Link length (per strip)'],
+    ['paperTD', 'Paper TD (per strip)'],
+    ['unrouted', 'Unrouted connection'],
+    ['short', 'Short'],
+    ['overlap', 'Overlap'],
+  ],
+  perfboard: [
+    ['area', 'Board area (per hole)'],
+    ['trace', 'Trace (per hole step)'],
+    ['link', 'Jumper wire'],
+    ['linkLength', 'Jumper length (per hole)'],
+    ['unrouted', 'Unrouted connection'],
+    ['short', 'Short'],
+    ['overlap', 'Overlap'],
+  ],
+};
 
 export function App() {
   const saved = useMemo(loadSaved, []);
@@ -128,31 +160,36 @@ export function App() {
   // Layout = saved placement per ref when still valid, else a deterministic random spot.
   const layout: Layout | null = useMemo(() => {
     if (!problem) return null;
-    const fallback = randomLayout(problem, new Rng(settings.seed));
+    const fallback = randomLayout(problem, new Rng(settings.seed), settings.boardType);
     return problem.netlist.components.map((c, i) => {
       const fp = problem.fps[i];
       const p = placements[c.ref];
-      if (p && fp.rotations.includes(p.rot) && fp.spans.includes(p.span)) {
+      if (p && rotationsFor(fp, settings.boardType).includes(p.rot) && fp.spans.includes(p.span)) {
         return clampToBoard(fp, p, problem.board.holes, problem.board.strips);
       }
       return fallback[i];
     });
-  }, [problem, placements, settings.seed]);
+  }, [problem, placements, settings.seed, settings.boardType]);
 
-  const routeOpts = useMemo(() => ({ cutMode: settings.cutMode }), [settings.cutMode]);
-  const usingFixedRoute = !!(layout && fixedRoute && fixedRoute.key === layoutKey(layout));
+  const perfboard = settings.boardType === 'perfboard';
+  const routeOpts = useMemo(
+    () => ({ cutMode: settings.cutMode, board: settings.boardType, perf: settings.perf }),
+    [settings.cutMode, settings.boardType, settings.perf],
+  );
+  // Cuts and links chosen by clingo apply to stripboard only.
+  const usingFixedRoute = !!(!perfboard && layout && fixedRoute && fixedRoute.key === layoutKey(layout));
   const evaluation = useMemo(() => {
     if (!problem || !layout) return null;
-    if (fixedRoute && fixedRoute.key === layoutKey(layout)) {
+    if (usingFixedRoute && fixedRoute) {
       const route = routeFromSolution(problem, layout, fixedRoute.cuts, fixedRoute.links);
       const metrics = computeMetrics(problem, layout, route);
       return { route, metrics, cost: costOf(metrics, settings.weights) };
     }
     return evaluate(problem, layout, routeOpts, settings.weights);
-  }, [problem, layout, routeOpts, settings.weights, fixedRoute]);
+  }, [problem, layout, routeOpts, settings.weights, fixedRoute, usingFixedRoute]);
   const verification = useMemo(
-    () => (problem && layout && evaluation ? verify(problem, layout, evaluation.route.cuts, evaluation.route.links) : null),
-    [problem, layout, evaluation],
+    () => (problem && layout && evaluation ? verifyRoute(problem, layout, evaluation.route, usingFixedRoute ? { cutMode: settings.cutMode } : routeOpts) : null),
+    [problem, layout, evaluation, routeOpts, usingFixedRoute, settings.cutMode],
   );
 
   // --- persistence -------------------------------------------------------------
@@ -236,7 +273,7 @@ export function App() {
             setElapsed(secs);
             if (bestLayout) {
               const ev = evaluate(problem, bestLayout, routeOpts, settings.weights);
-              const ok = verify(problem, bestLayout, ev.route.cuts, ev.route.links).ok;
+              const ok = verifyRoute(problem, bestLayout, ev.route, routeOpts).ok;
               setSaSnap({ layout: bestLayout, metrics: ev.metrics, clean: isClean(ev.metrics) && ok, seconds: secs });
             }
             workersRef.current = [];
@@ -301,7 +338,7 @@ export function App() {
       switch (e.key) {
         case 'r':
         case 'R': {
-          const rots = fp.rotations;
+          const rots = rotationsFor(fp, settings.boardType);
           const rot = rots[(rots.indexOf(p.rot) + (e.shiftKey ? rots.length - 1 : 1)) % rots.length];
           const g0 = geometry(fp, p.rot, p.span);
           const g1 = geometry(fp, rot, p.span);
@@ -337,7 +374,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selected, problem, layout, running, movePart]);
+  }, [selected, problem, layout, running, movePart, settings.boardType]);
 
   // --- examples, import / export ---------------------------------------------------
   const loadExample = (id: string) => {
@@ -353,13 +390,14 @@ export function App() {
   };
 
   const sheet = useMemo(
-    () => (problem && layout && evaluation ? buildSheet(problem, layout, evaluation.route, evaluation.metrics) : null),
-    [problem, layout, evaluation],
+    () => (problem && layout && evaluation ? buildSheet(problem, layout, evaluation.route, evaluation.metrics, settings.boardType) : null),
+    [problem, layout, evaluation, settings.boardType],
   );
 
-  const exportSvg = () => svgRef.current && downloadText(svgToString(svgRef.current), `stripboard-${side}.svg`, 'image/svg+xml');
-  const exportPng = async () => svgRef.current && downloadBlob(await svgToPng(svgRef.current), `stripboard-${side}.png`);
-  const exportSheet = () => sheet && downloadText(buildSheetText(sheet), 'stripboard-build-sheet.txt');
+  const prefix = settings.boardType;
+  const exportSvg = () => svgRef.current && downloadText(svgToString(svgRef.current), `${prefix}-${side}.svg`, 'image/svg+xml');
+  const exportPng = async () => svgRef.current && downloadBlob(await svgToPng(svgRef.current), `${prefix}-${side}.png`);
+  const exportSheet = () => sheet && downloadText(buildSheetText(sheet), `${prefix}-build-sheet.txt`);
   const saveProject = () =>
     downloadText(JSON.stringify({ format: 'stripboard-project', version: 1, source, placements, settings, fixedRoute }, null, 2), 'stripboard-project.json', 'application/json');
   const loadProject = async (file: File) => {
@@ -370,13 +408,33 @@ export function App() {
       setSource(data.source);
       setPlacements(data.placements ?? {});
       setFixedRoute(data.fixedRoute ?? null);
-      setSettings({ ...DEFAULT_SETTINGS, ...data.settings, weights: { ...DEFAULT_WEIGHTS, ...data.settings?.weights } });
+      setSettings(mergeSettings(data.settings));
     } catch (e) {
       alert(`Could not load project: ${(e as Error).message}`);
     }
   };
 
   const setWeight = (k: keyof CostWeights, v: number) => setSettings((s) => ({ ...s, weights: { ...s.weights, [k]: v } }));
+
+  const setBoardType = (boardType: BoardType) => {
+    if (boardType === settings.boardType) return;
+    stop();
+    setFixedRoute(null);
+    setSettings((s) => ({
+      ...s,
+      boardType,
+      // Keep a custom iteration count; swap the default for this board type's.
+      iterations: s.iterations === DEFAULT_ITERATIONS[s.boardType] ? DEFAULT_ITERATIONS[boardType] : s.iterations,
+    }));
+  };
+
+  /** Change perfboard wiring options, keeping them consistent: straight jumpers need traces. */
+  const setPerf = (patch: Partial<PerfOptions>) =>
+    setSettings((s) => {
+      const perf = { ...s.perf, ...patch };
+      if (!perf.traces && perf.jumpers !== 'angled') perf.jumpers = 'angled';
+      return { ...s, perf };
+    });
 
   const m = evaluation?.metrics;
   const clean = m ? isClean(m) && verification?.ok : false;
@@ -389,7 +447,7 @@ export function App() {
         <h1>
           <span className="logo" aria-hidden="true">▤</span> Stripboard Optimiser
         </h1>
-        <p className="tagline">Automatic component placement, track cuts and wire links for stripboard / Veroboard</p>
+        <p className="tagline">Automatic component placement and wiring for stripboard (Veroboard) and perfboard</p>
       </header>
 
       <aside className="panel left">
@@ -502,6 +560,7 @@ export function App() {
                 problem={problem}
                 layout={layout}
                 route={evaluation.route}
+                board={settings.boardType}
                 side={side}
                 selected={selected}
                 hoverNet={hoverNet}
@@ -534,29 +593,33 @@ export function App() {
               Net <b>{hoverNet}</b>
             </span>
           ) : (
-            <span className="hint">Click a part to select it; drag to move. Hover copper to highlight a net.</span>
+            <span className="hint">Click a part to select it; drag to move. Hover {perfboard ? 'a trace' : 'copper'} to highlight a net.</span>
           )}
         </div>
 
         {sheet && (
           <details className="sheet">
             <summary>
-              Build sheet — {sheet.cuts.length} cuts, {sheet.links.length} links, {sheet.parts.length} parts
+              Build sheet —{' '}
+              {sheet.kind === 'perfboard'
+                ? `${sheet.traces.length} traces, ${sheet.links.length} jumpers`
+                : `${sheet.cuts.length} cuts, ${sheet.links.length} links`}
+              , {sheet.parts.length} parts
             </summary>
             <p>
               <b>Board:</b> {sheet.board}
             </p>
             <div className="sheet-cols">
               <div>
-                <h3>Track cuts (copper side)</h3>
+                <h3>{sheet.kind === 'perfboard' ? 'Solder-side traces' : 'Track cuts (copper side)'}</h3>
                 <ol>
-                  {sheet.cuts.map((c, i) => (
+                  {(sheet.kind === 'perfboard' ? sheet.traces : sheet.cuts).map((c, i) => (
                     <li key={i}>{c}</li>
                   ))}
                 </ol>
               </div>
               <div>
-                <h3>Wire links</h3>
+                <h3>{sheet.kind === 'perfboard' ? 'Jumper wires' : 'Wire links'}</h3>
                 <ol>
                   {sheet.links.map((c, i) => (
                     <li key={i}>{c}</li>
@@ -655,27 +718,48 @@ export function App() {
                   <tr>
                     <td>Board used</td>
                     <td>
-                      {m.height} strips × {m.width} holes ({m.area})
+                      {m.height} {perfboard ? 'rows' : 'strips'} × {m.width} holes ({m.area})
                     </td>
                   </tr>
-                  <tr>
-                    <td>Track cuts</td>
-                    <td>{m.cuts}</td>
-                  </tr>
-                  <tr>
-                    <td>Wire links</td>
-                    <td>
-                      {m.links} (total {m.linkLength} strips)
-                    </td>
-                  </tr>
+                  {perfboard ? (
+                    <>
+                      <tr>
+                        <td>Traces</td>
+                        <td>
+                          {evaluation!.route.traces?.length ?? 0} runs (total {m.traceLength} steps)
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>Jumpers</td>
+                        <td>
+                          {m.links} (total {Number.isInteger(m.linkLength) ? m.linkLength : m.linkLength.toFixed(1)} holes)
+                        </td>
+                      </tr>
+                    </>
+                  ) : (
+                    <>
+                      <tr>
+                        <td>Track cuts</td>
+                        <td>{m.cuts}</td>
+                      </tr>
+                      <tr>
+                        <td>Wire links</td>
+                        <td>
+                          {m.links} (total {m.linkLength} strips)
+                        </td>
+                      </tr>
+                    </>
+                  )}
                   <tr>
                     <td>Unrouted</td>
                     <td>{m.unrouted}</td>
                   </tr>
-                  <tr>
-                    <td title="Paper metric (arXiv:2512.04910): Σ |strip(pin 1) − strip(pin 2)| per part">Paper TD</td>
-                    <td>{m.paperTD}</td>
-                  </tr>
+                  {!perfboard && (
+                    <tr>
+                      <td title="Paper metric (arXiv:2512.04910): Σ |strip(pin 1) − strip(pin 2)| per part">Paper TD</td>
+                      <td>{m.paperTD}</td>
+                    </tr>
+                  )}
                   <tr>
                     <td>Cost</td>
                     <td>{evaluation!.cost.toFixed(1)}</td>
@@ -688,7 +772,7 @@ export function App() {
           )}
         </section>
 
-        {problem && (
+        {problem && !perfboard && (
           <AspPanel
             problem={problem}
             currentMetrics={m ?? null}
@@ -710,8 +794,16 @@ export function App() {
 
         <section>
           <h2>Settings</h2>
+          <div className="seg wide" role="group" aria-label="Board type">
+            <button className={!perfboard ? 'on' : ''} onClick={() => setBoardType('stripboard')}>
+              Stripboard
+            </button>
+            <button className={perfboard ? 'on' : ''} onClick={() => setBoardType('perfboard')}>
+              Perfboard
+            </button>
+          </div>
           <label className="field">
-            <span>Board</span>
+            <span>Board size</span>
             <select
               value={settings.boardMode}
               onChange={(e) => setSettings((s) => ({ ...s, boardMode: e.target.value as Settings['boardMode'], customBoard: board ?? s.customBoard }))}
@@ -744,13 +836,47 @@ export function App() {
               </label>
             </div>
           )}
-          <label className="field">
-            <span>Track cuts</span>
-            <select value={settings.cutMode} onChange={(e) => setSettings((s) => ({ ...s, cutMode: e.target.value as CutMode }))}>
-              <option value="hole">At a hole (spot-face cutter)</option>
-              <option value="between">Between holes (knife)</option>
-            </select>
-          </label>
+          {perfboard ? (
+            <>
+              <label className="field inline check">
+                <input type="checkbox" checked={settings.perf.traces} onChange={(e) => setPerf({ traces: e.target.checked })} />
+                <span>Solder-side traces (solder bridges / bare wire along the holes)</span>
+              </label>
+              <label className="field">
+                <span>Jumper wires</span>
+                <select value={settings.perf.jumpers} onChange={(e) => setPerf({ jumpers: e.target.value as JumperMode })}>
+                  <option value="none" disabled={!settings.perf.traces}>
+                    None
+                  </option>
+                  <option value="straight" disabled={!settings.perf.traces}>
+                    Straight (bare wire, horizontal or vertical)
+                  </option>
+                  <option value="angled">Any angle (insulated, point to point)</option>
+                </select>
+              </label>
+              {settings.perf.jumpers !== 'none' && (
+                <label className="field">
+                  <span>Longest jumper (holes)</span>
+                  <input
+                    type="number"
+                    min={2}
+                    max={60}
+                    value={settings.perf.maxJumper}
+                    onChange={(e) => setPerf({ maxJumper: Math.max(2, Math.min(60, Math.trunc(+e.target.value) || 2)) })}
+                  />
+                </label>
+              )}
+              {!settings.perf.traces && <p className="hint small">Without traces, every connection is an insulated wire soldered pad to pad.</p>}
+            </>
+          ) : (
+            <label className="field">
+              <span>Track cuts</span>
+              <select value={settings.cutMode} onChange={(e) => setSettings((s) => ({ ...s, cutMode: e.target.value as CutMode }))}>
+                <option value="hole">At a hole (spot-face cutter)</option>
+                <option value="between">Between holes (knife)</option>
+              </select>
+            </label>
+          )}
           <div className="row">
             <label className="field">
               <span>Iterations</span>
@@ -779,7 +905,7 @@ export function App() {
           </div>
           <details>
             <summary>Cost weights</summary>
-            {WEIGHT_LABELS.map(([k, label]) => (
+            {WEIGHT_LABELS[settings.boardType].map(([k, label]) => (
               <label className="field inline" key={k}>
                 <span>{label}</span>
                 <input type="number" min={0} step="any" value={settings.weights[k]} onChange={(e) => setWeight(k, Math.max(0, +e.target.value || 0))} />

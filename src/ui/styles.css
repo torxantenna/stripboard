@@ -319,6 +319,31 @@ svg.board {
 .board .copper {
   fill: var(--copper);
 }
+.board .pad {
+  fill: var(--copper);
+}
+.board .trace {
+  stroke-width: 7;
+  stroke-linecap: round;
+}
+.board .wire .insulation {
+  fill: none;
+  stroke: var(--part-stroke);
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+.board .wire .core {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.board .wire circle {
+  fill: var(--part-stroke);
+}
+.board .wire.link-under path {
+  stroke-dasharray: 3 4;
+  opacity: 0.7;
+}
 .board .hole {
   fill: var(--hole);
   pointer-events: none;
@@ -498,6 +523,22 @@ table.metrics td:last-child {
 }
 .field.inline input {
   width: 80px;
+}
+.field.check {
+  justify-content: flex-start;
+  gap: 8px;
+  color: var(--text);
+}
+.field.check input {
+  width: auto;
+  flex: none;
+  margin: 0;
+}
+.seg.wide {
+  display: flex;
+}
+.seg.wide button {
+  flex: 1;
 }
 
 /* --- build sheet ------------------------------------------------------------------- */

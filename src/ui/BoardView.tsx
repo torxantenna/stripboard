@@ -2,7 +2,7 @@ import { useMemo, useRef, useState, type PointerEvent as RPointerEvent, type Ref
 import { geometry, placedGeometry, radialRadius } from '../core/footprints';
 import type { Problem } from '../core/problem';
 import { stripName } from '../core/route';
-import type { Hole, Layout, Placement, RouteResult } from '../core/types';
+import type { BoardType, Hole, Layout, Placement, RouteResult, Wire } from '../core/types';
 import { netColorMap } from './netColors';
 
 export type Side = 'component' | 'copper';
@@ -11,6 +11,8 @@ interface Props {
   problem: Problem;
   layout: Layout;
   route: RouteResult;
+  /** Stripboard draws copper strips, cuts and links; perfboard draws pads, traces and jumpers. */
+  board?: BoardType;
   side: Side;
   selected: number | null;
   hoverNet: string | null;
@@ -34,6 +36,7 @@ export function BoardView(props: Props) {
   const [drag, setDrag] = useState<{ i: number; dx: number; dy: number; moved: boolean } | null>(null);
 
   const copper = side === 'copper';
+  const perf = props.board === 'perfboard';
   const cx = (x: number) => M + (copper ? W - 1 - x : x) * S + S / 2;
   const cy = (y: number) => M + y * S + S / 2;
   const width = W * S + 2 * M;
@@ -92,7 +95,7 @@ export function BoardView(props: Props) {
   };
 
   const strips = [];
-  for (let y = 0; y < H; y++) {
+  for (let y = 0; y < H && !perf; y++) {
     const yy = cy(y) - S * 0.38;
     strips.push(
       <rect key={`s${y}`} className="copper" x={M} y={yy} width={W * S} height={S * 0.76} rx={2} opacity={copper ? 1 : 0.55} />,
@@ -121,6 +124,60 @@ export function BoardView(props: Props) {
   const holes = [];
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) holes.push(<circle key={`h${x},${y}`} className="hole" cx={cx(x)} cy={cy(y)} r={S * 0.13} />);
+
+  // Perfboard: one copper pad per hole, solder-side traces, and jumper wires.
+  const pads = [];
+  if (perf)
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++)
+        pads.push(<circle key={`p${x},${y}`} className="pad" cx={cx(x)} cy={cy(y)} r={S * 0.34} opacity={copper ? 1 : 0.55} />);
+
+  const wireName = (w: Wire) => `${stripName(w.y1)}${w.x1 + 1}–${stripName(w.y2)}${w.x2 + 1}`;
+  const traces = (route.traces ?? []).map((t, i) => (
+    <line
+      key={`t${i}`}
+      className="trace"
+      x1={cx(t.x1)}
+      y1={cy(t.y1)}
+      x2={cx(t.x2)}
+      y2={cy(t.y2)}
+      stroke={colors.get(t.net)}
+      opacity={(copper ? 0.95 : 0.35) * netOpacity(t.net)}
+      onPointerEnter={() => props.onHoverNet(t.net)}
+      onPointerLeave={() => props.onHoverNet(null)}
+    >
+      <title>{`Trace ${wireName(t)} (net ${t.net})`}</title>
+    </line>
+  ));
+
+  const jumpers = (route.jumpers ?? []).map((j, i) => {
+    const x1 = cx(j.x1);
+    const y1 = cy(j.y1);
+    const x2 = cx(j.x2);
+    const y2 = cy(j.y2);
+    const straight = j.x1 === j.x2 || j.y1 === j.y2;
+    // Angled jumpers are insulated wires: draw them with a slight bow so crossings read clearly.
+    const len = Math.hypot(x2 - x1, y2 - y1) || 1;
+    const bow = straight ? 0 : Math.min(S * 0.8, len * 0.12);
+    const qx = (x1 + x2) / 2 + ((y2 - y1) / len) * bow;
+    const qy = (y1 + y2) / 2 - ((x2 - x1) / len) * bow;
+    const d = `M${x1} ${y1}Q${qx} ${qy} ${x2} ${y2}`;
+    return (
+      <g
+        key={`j${i}`}
+        className={`${straight ? 'link' : 'wire'}${copper ? ' link-under' : ''}`}
+        opacity={netOpacity(j.net)}
+        onPointerEnter={() => props.onHoverNet(j.net)}
+        onPointerLeave={() => props.onHoverNet(null)}
+      >
+        {straight ? <line x1={x1} y1={y1} x2={x2} y2={y2} /> : <path className="insulation" d={d} />}
+        {!straight && <path className="core" d={d} stroke={colors.get(j.net)} />}
+        <circle cx={x1} cy={y1} r={S * 0.2} />
+        <circle cx={x2} cy={y2} r={S * 0.2} />
+        <title>{`Jumper ${wireName(j)} (${straight ? 'straight' : 'insulated'}, net ${j.net})`}</title>
+      </g>
+    );
+  });
 
   const cuts = route.cuts.map((c, i) => {
     if (c.kind === 'hole') {
@@ -319,10 +376,12 @@ export function BoardView(props: Props) {
       onPointerCancel={() => setDrag(null)}
       onPointerDown={() => props.onSelect(null)}
       role="img"
-      aria-label={`Stripboard layout, ${side} side`}
+      aria-label={`${perf ? 'Perfboard' : 'Stripboard'} layout, ${side} side`}
     >
       <rect className="pcb" x={M - 6} y={M - 6} width={W * S + 12} height={H * S + 12} rx={6} />
       {strips}
+      {pads}
+      {traces}
       {holes}
       {props.used && (() => {
         const u = props.used;
@@ -338,12 +397,14 @@ export function BoardView(props: Props) {
         <>
           {parts}
           {links}
+          {jumpers}
           {cuts}
         </>
       ) : (
         <>
           {links}
           {parts}
+          {jumpers}
           {cuts}
         </>
       )}
